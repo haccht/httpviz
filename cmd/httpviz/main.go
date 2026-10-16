@@ -119,7 +119,7 @@ func main() {
 
 	pflag.CommandLine.SortFlags = false
 
-	pflag.BoolVar(&flagH1, "h1", false, "Force HTTP/1.1 (or HTTP/1.0) protocol inspection")
+	pflag.BoolVar(&flagH1, "h1", false, "Force HTTP/1.1 protocol inspection")
 	pflag.BoolVar(&flagH2, "h2", false, "Force HTTP/2 protocol inspection")
 	pflag.BoolVar(&flagH3, "h3", false, "Force HTTP/3 (QUIC) protocol inspection")
 	pflag.BoolVarP(&flagInsecure, "insecure", "k", false, "Skip TLS certificate verification")
