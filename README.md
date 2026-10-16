@@ -9,6 +9,7 @@
 - **HTTP/3 (`--h3`)**: QUIC packets (`QUIC_PACKET`) and inner frames (`STREAM`, `ACK`, `CRYPTO`, `HANDSHAKE_DONE`, etc.) alongside HTTP/3 frames via `quic-go` qlog tracing.
 - **Connection timing**: DNS lookup, TCP connect, and TLS handshake duration with negotiated TLS version, cipher suite, and ALPN.
 - **Timeline view (`--timeline`)**: ASCII chart showing how multiple streams are interleaved over a connection.
+- **Capture file visualization (`-r, --read`)**: Offline visualization of HAR (`.har`) and PCAP/PCAPNG (`.pcap`, `.pcapng`) files in both tree and timeline views.
 
 ## Install
 
@@ -27,9 +28,12 @@ go build -o bin/httpviz ./cmd/httpviz
 ## Usage
 
 ```text
-Usage: httpviz [flags] <URL1> [URL2 ... URL_N]
+Usage:
+  httpviz [flags] <URL1> [URL2 ... URL_N]
+  httpviz [flags] -r <file>
 
 Flags:
+  -r, --read string          Read and visualize traffic from a capture file (.har, .pcap, .pcapng)
       --h1                   Force HTTP/1.1 protocol inspection
       --h2                   Force HTTP/2 protocol inspection
       --h3                   Force HTTP/3 (QUIC) protocol inspection
@@ -143,6 +147,15 @@ Legend:
   Upper = Sent (Client -> Server), Lower = Recv (Server -> Client)
   [S]/[s] SETTINGS   [W]/[w] WINDOW_UPDATE   [H]/[h] HEADERS
   [D]/[d] DATA       [G]/[g] GOAWAY          * = END_STREAM / ACK
+```
+
+### Capture Files (`-r, --read`)
+
+Visualize browser-exported `.har` files or packet captures (`.pcap`, `.pcapng`):
+
+```text
+$ httpviz -r trace.har --timeline
+$ httpviz -r capture.pcap --body
 ```
 
 ## License

@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -323,4 +325,181 @@ func TestE2EBinaries(t *testing.T) {
 			t.Errorf("expected --ping note on HTTP/1.1, got:\n%s", outH1Ping.String())
 		}
 	})
+
+	// 14. Test -r / --read with HAR and PCAP files (Tree, Timeline, Body, and Validation)
+	t.Run("ReadCaptureFiles_HAR_And_PCAP", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		harFile := filepath.Join(tmpDir, "trace.har")
+		harContent := `{
+  "log": {
+    "version": "1.2",
+    "entries": [
+      {
+        "startedDateTime": "2026-10-16T12:00:00.000Z",
+        "time": 35.0,
+        "serverIPAddress": "93.184.215.14",
+        "_securityDetails": {"protocol": "TLS 1.3", "cipher": "TLS_AES_128_GCM_SHA256"},
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/index.html",
+          "httpVersion": "h2",
+          "headers": [{"name": "user-agent", "value": "httpviz-har-test"}],
+          "headersSize": 32
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "httpVersion": "h2",
+          "headers": [{"name": "content-type", "value": "text/html"}],
+          "headersSize": 28,
+          "bodySize": 18,
+          "content": {"size": 18, "mimeType": "text/html", "text": "<h1>Hello HAR</h1>"}
+        },
+        "timings": {"dns": 2.0, "connect": 15.0, "ssl": 9.0, "send": 1.0, "wait": 12.0, "receive": 5.0}
+      },
+      {
+        "startedDateTime": "2026-10-16T12:00:00.016Z",
+        "time": 20.0,
+        "serverIPAddress": "93.184.215.14",
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/style.css",
+          "httpVersion": "h2",
+          "headers": [{"name": "user-agent", "value": "httpviz-har-test"}],
+          "headersSize": 30
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "httpVersion": "h2",
+          "headers": [{"name": "content-type", "value": "text/css"}],
+          "headersSize": 26,
+          "bodySize": 12,
+          "content": {"size": 12, "mimeType": "text/css", "text": "body{margin:0}"}
+        },
+        "timings": {"dns": -1, "connect": -1, "ssl": -1, "send": 1.0, "wait": 14.0, "receive": 5.0}
+      }
+    ]
+  }
+}`
+		if err := os.WriteFile(harFile, []byte(harContent), 0600); err != nil {
+			t.Fatalf("failed to write HAR file: %v", err)
+		}
+
+		// Tree view with --body on HAR
+		cmdHARTree := exec.Command(binPath, "-r", harFile, "--body")
+		var outHARTree bytes.Buffer
+		cmdHARTree.Stdout = &outHARTree
+		cmdHARTree.Stderr = &outHARTree
+		if err := cmdHARTree.Run(); err != nil {
+			t.Fatalf("httpviz -r trace.har --body failed: %v, out: %s", err, outHARTree.String())
+		}
+		resHARTree := outHARTree.String()
+		if !strings.Contains(resHARTree, "* DNS Lookup: example.com -> 93.184.215.14") ||
+			!strings.Contains(resHARTree, "* TLS Handshake: TLSv1.3, Cipher: TLS_AES_128_GCM_SHA256") ||
+			!strings.Contains(resHARTree, "Payload: <h1>Hello HAR</h1>") {
+			t.Errorf("unexpected HAR tree output:\n%s", resHARTree)
+		}
+
+		// Timeline view on HAR
+		cmdHARTimeline := exec.Command(binPath, "-r", harFile, "--timeline")
+		var outHARTimeline bytes.Buffer
+		cmdHARTimeline.Stdout = &outHARTimeline
+		cmdHARTimeline.Stderr = &outHARTimeline
+		if err := cmdHARTimeline.Run(); err != nil {
+			t.Fatalf("httpviz -r trace.har --timeline failed: %v, out: %s", err, outHARTimeline.String())
+		}
+		resHARTimeline := outHARTimeline.String()
+		if !strings.Contains(resHARTimeline, "Stream 1") || !strings.Contains(resHARTimeline, "Stream 3") {
+			t.Errorf("expected Stream 1 and Stream 3 in HAR timeline output, got:\n%s", resHARTimeline)
+		}
+
+		// PCAP file test (HTTP/1.1 request & response)
+		pcapFile := filepath.Join(tmpDir, "capture.pcap")
+		pcapBytes := buildSimpleTestPCAP(
+			[]byte("GET /hello HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+			[]byte("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhello-pcap"),
+		)
+		if err := os.WriteFile(pcapFile, pcapBytes, 0600); err != nil {
+			t.Fatalf("failed to write PCAP file: %v", err)
+		}
+
+		cmdPCAP := exec.Command(binPath, "-r", pcapFile, "--body")
+		var outPCAP bytes.Buffer
+		cmdPCAP.Stdout = &outPCAP
+		cmdPCAP.Stderr = &outPCAP
+		if err := cmdPCAP.Run(); err != nil {
+			t.Fatalf("httpviz -r capture.pcap --body failed: %v, out: %s", err, outPCAP.String())
+		}
+		resPCAP := outPCAP.String()
+		if !strings.Contains(resPCAP, "* Connected to 93.184.215.14:80") ||
+			!strings.Contains(resPCAP, `"GET /hello HTTP/1.1"`) ||
+			!strings.Contains(resPCAP, "Payload: hello-pcap") {
+			t.Errorf("unexpected PCAP output:\n%s", resPCAP)
+		}
+
+		// Mutual exclusion: -r with URL argument should fail
+		cmdConflictURL := exec.Command(binPath, "-r", harFile, srv.H1Addr)
+		if err := cmdConflictURL.Run(); err == nil {
+			t.Errorf("expected error when specifying both -r and URL argument")
+		}
+
+		// Mutual exclusion: -r with live-request flag (-X POST) should fail
+		cmdConflictFlag := exec.Command(binPath, "-r", harFile, "-X", "POST")
+		if err := cmdConflictFlag.Run(); err == nil {
+			t.Errorf("expected error when specifying -r with -X POST")
+		}
+	})
+}
+
+func buildSimpleTestPCAP(reqPayload, respPayload []byte) []byte {
+	var buf bytes.Buffer
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(0xa1b2c3d4))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(2))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(4))
+	_ = binary.Write(&buf, binary.LittleEndian, int32(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(65535))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(1)) // Ethernet
+
+	writePkt := func(usec uint32, srcIP string, srcPort uint16, dstIP string, dstPort uint16, seq, ack uint32, flags uint8, payload []byte) {
+		var pkt bytes.Buffer
+		pkt.Write(make([]byte, 12))
+		_ = binary.Write(&pkt, binary.BigEndian, uint16(0x0800))
+
+		ip := make([]byte, 20)
+		ip[0] = 0x45
+		binary.BigEndian.PutUint16(ip[2:4], uint16(40+len(payload)))
+		ip[8] = 64
+		ip[9] = 6
+		copy(ip[12:16], net.ParseIP(srcIP).To4())
+		copy(ip[16:20], net.ParseIP(dstIP).To4())
+		pkt.Write(ip)
+
+		tcp := make([]byte, 20)
+		binary.BigEndian.PutUint16(tcp[0:2], srcPort)
+		binary.BigEndian.PutUint16(tcp[2:4], dstPort)
+		binary.BigEndian.PutUint32(tcp[4:8], seq)
+		binary.BigEndian.PutUint32(tcp[8:12], ack)
+		tcp[12] = 5 << 4
+		tcp[13] = flags
+		binary.BigEndian.PutUint16(tcp[14:16], 65535)
+		pkt.Write(tcp)
+		pkt.Write(payload)
+
+		raw := pkt.Bytes()
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(1700000000))
+		_ = binary.Write(&buf, binary.LittleEndian, usec)
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(len(raw)))
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(len(raw)))
+		buf.Write(raw)
+	}
+
+	writePkt(0, "10.0.0.1", 55000, "93.184.215.14", 80, 100, 0, 0x02, nil)
+	writePkt(4000, "93.184.215.14", 80, "10.0.0.1", 55000, 200, 101, 0x12, nil)
+	writePkt(8000, "10.0.0.1", 55000, "93.184.215.14", 80, 101, 201, 0x10, nil)
+	writePkt(10000, "10.0.0.1", 55000, "93.184.215.14", 80, 101, 201, 0x10, reqPayload)
+	writePkt(20000, "93.184.215.14", 80, "10.0.0.1", 55000, 201, 101+uint32(len(reqPayload)), 0x10, respPayload)
+
+	return buf.Bytes()
 }

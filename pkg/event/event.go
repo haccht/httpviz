@@ -68,19 +68,20 @@ type FrameEvent struct {
 
 // Options holds common client configuration across HTTP/1.x, HTTP/2, and HTTP/3.
 type Options struct {
-	Method     string
-	Data       string
-	Headers    []string
-	ShowBody   bool
-	BodyLimit  int
-	WindowSize uint32
-	Ping       bool
-	Insecure   bool
-	Timeout    time.Duration
-	OnEvent    func(FrameEvent)
-	OnInfo     func(msg string, elapsed time.Duration)
-	Conn       net.Conn
-	ConnStart  time.Time
+	Method         string
+	Data           string
+	Headers        []string
+	ShowBody       bool
+	BodyLimit      int
+	WindowSize     uint32
+	Ping           bool
+	Insecure       bool
+	Timeout        time.Duration
+	ProtocolFilter string
+	OnEvent        func(FrameEvent)
+	OnInfo         func(msg string, elapsed time.Duration)
+	Conn           net.Conn
+	ConnStart      time.Time
 }
 
 // EffectiveTimeout returns Timeout if positive, or the default 10s timeout.

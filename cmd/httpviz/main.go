@@ -13,6 +13,7 @@ import (
 	"github.com/haccht/httpviz/pkg/h2"
 	"github.com/haccht/httpviz/pkg/h3"
 	"github.com/haccht/httpviz/pkg/render"
+	"github.com/haccht/httpviz/pkg/tracefile"
 	"github.com/spf13/pflag"
 )
 
@@ -42,6 +43,7 @@ func (b *bodyLimitValue) Type() string {
 
 func normalizeBodyArgs(args []string) []string {
 	takesValue := map[string]bool{
+		"-r": true, "--read": true,
 		"-X": true, "--request": true,
 		"-H": true, "--header": true,
 		"-d": true, "--data": true,
@@ -102,6 +104,7 @@ func negotiateAndRun(urls []string, opts event.Options) ([]event.FrameEvent, err
 
 func main() {
 	var (
+		flagRead       string
 		flagH1         bool
 		flagH2         bool
 		flagH3         bool
@@ -119,6 +122,7 @@ func main() {
 
 	pflag.CommandLine.SortFlags = false
 
+	pflag.StringVarP(&flagRead, "read", "r", "", "Read and visualize traffic from a capture file (.har, .pcap, .pcapng)")
 	pflag.BoolVar(&flagH1, "h1", false, "Force HTTP/1.1 protocol inspection")
 	pflag.BoolVar(&flagH2, "h2", false, "Force HTTP/2 protocol inspection")
 	pflag.BoolVar(&flagH3, "h3", false, "Force HTTP/3 (QUIC) protocol inspection")
@@ -135,7 +139,7 @@ func main() {
 	pflag.DurationVar(&flagTimeout, "timeout", 10*time.Second, "Overall connection and request timeout")
 
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <URL1> [URL2 ... URL_N]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage:\n  %s [flags] <URL1> [URL2 ... URL_N]\n  %s [flags] -r <file>\n\n", os.Args[0], os.Args[0])
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		pflag.PrintDefaults()
 	}
@@ -144,24 +148,39 @@ func main() {
 	pflag.Parse()
 
 	urls := pflag.Args()
-	if len(urls) == 0 {
+	if flagRead == "" && len(urls) == 0 {
 		pflag.Usage()
+		os.Exit(1)
+	}
+	if flagRead != "" && len(urls) > 0 {
+		fmt.Fprintln(os.Stderr, "Error: cannot specify both -r/--read and URL arguments")
 		os.Exit(1)
 	}
 
 	protoCount := 0
+	protoFilter := ""
 	if flagH1 {
 		protoCount++
+		protoFilter = "h1"
 	}
 	if flagH2 {
 		protoCount++
+		protoFilter = "h2"
 	}
 	if flagH3 {
 		protoCount++
+		protoFilter = "h3"
 	}
 	if protoCount > 1 {
 		fmt.Fprintln(os.Stderr, "Error: cannot specify multiple protocol flags (--h1, --h2, --h3)")
 		os.Exit(1)
+	}
+
+	if flagRead != "" {
+		if flagMethod != "" || len(flagHeaders) > 0 || flagData != "" || flagInsecure || flagPing || pflag.CommandLine.Changed("window-size") {
+			fmt.Fprintln(os.Stderr, "Error: live request flags (-X, -H, -d, -k, --ping, --window-size) cannot be used with -r/--read")
+			os.Exit(1)
+		}
 	}
 
 	if strings.HasPrefix(flagData, "@") && len(flagData) > 1 {
@@ -195,23 +214,26 @@ func main() {
 	}
 
 	opts := event.Options{
-		Method:     flagMethod,
-		Data:       flagData,
-		Headers:    flagHeaders,
-		ShowBody:   flagBodyLimit >= 0,
-		BodyLimit:  flagBodyLimit,
-		WindowSize: flagWindowSize,
-		Ping:       flagPing,
-		Insecure:   flagInsecure,
-		Timeout:    flagTimeout,
-		OnEvent:    onEvent,
-		OnInfo:     onInfo,
+		Method:         flagMethod,
+		Data:           flagData,
+		Headers:        flagHeaders,
+		ShowBody:       flagBodyLimit >= 0,
+		BodyLimit:      flagBodyLimit,
+		WindowSize:     flagWindowSize,
+		Ping:           flagPing,
+		Insecure:       flagInsecure,
+		Timeout:        flagTimeout,
+		ProtocolFilter: protoFilter,
+		OnEvent:        onEvent,
+		OnInfo:         onInfo,
 	}
 
 	var events []event.FrameEvent
 	var err error
 
 	switch {
+	case flagRead != "":
+		events, err = tracefile.RunFile(flagRead, opts)
 	case flagH1:
 		events, err = h1.Run(urls, opts)
 	case flagH2:
